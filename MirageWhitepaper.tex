@@ -1,0 +1,406 @@
+\documentclass[letterpaper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{amssymb}
+\usepackage{url}
+\usepackage{multicol}
+\usepackage{graphicx}
+\usepackage[a4paper, margin=0.9in]{geometry}
+
+
+\title{Mirage Protocol}
+
+\author{@moodyCoins}
+
+\date{2023}
+
+\begin{document}
+
+\maketitle
+
+
+\begin{abstract}
+    Mirage Protocol is a decentralized perpetuals exchange written in Move. It is powered by a suite of DeFi smart contract modules, connected through a global debt management system. This paper details the decisions behind the design of Mirage Protocol and gives a basic explanation of the underlying mathematics.
+\end{abstract}
+
+\begin{multicols}{2}
+
+\section{Introduction}
+
+By and large the primary drivers of DeFi so far have been trading, lending, and asset creation (Dai, sETH, etc). Mirage Protocol leverages these three facets to facilitate a completely decentralized, slippage-free, gas-efficient perpetuals exchange.
+
+At its core, Mirage Protocol is a debt management system resting on top of a group of collateralized debt pools. Each module is given a different responsibility in managing the debt, and together they form the entirety of the protocol. The fundamental goals of the protocol are the following:
+
+\begin{itemize}
+    \item Afford users a fully fledged perpetuals experience
+    \item Maintain over-collateralization in all instances
+    \item Exchange profitability
+\end{itemize}
+
+Therefore, much thought must be given to the specifics of debt management, and especially to the details of the implementation of the perpetuals exchange itself. It is important that the exchange have extremely modest and reasonable fees for the majority of its lifespan, while using pressure from various system parameters to enforce system balance in other instances. 
+
+\section{Mirage Assets}
+
+The total net existence of Mirage Assets are essentially all of Mirage Protocol's debt. They are created only by depositing collateral into a Vault (Sec.~\ref{sec:vaults}), and are always kept over-collateralized. Creation of these assets is equivalent to the creation of new protocol debt, whereas the reverse is true of burning them. Mirage Assets are also the underlying margin of all Market trades. The ability to create and destroy Mirage Assets is how the protocol leverages it's decentralized exchange (Sec.~\ref{sec:mirage-markets}). 
+
+
+\subsection{True Interest Rate}
+
+A small amount of interest is taken at a flat rate on all debt, but this is within the Vault contract, and only alters the rebase $V$ (Sec.~\ref{sec:vaults}). Other parts of the protocol are creating and destroying debt all the time. Let's call the percent rate of debt creation or destruction $R_{\text{global}}$, such that every year this much is created or destroyed depending on the sign. Therefore, if a vault if the protocol is charging an interest rate of $R_V$, the effective ``true" interest rate is:
+
+\begin{equation}
+    \text{true interest rate} := R_V + R_{\text{global}}
+\end{equation}
+
+The goal of Mirage protocol is to keep $R_{\text{global}} < -R_V$ on long time scales. There are multiple ways the protocol can tweak parameters to bring the system back into alignment. This is essentially a statement about the protocol's revenue overall.
+
+
+
+
+\section{Global Debt Management}
+
+Protocol debt is managed globally at the highest level per-asset. Global debt is represented by a rebase number. Given two numbers $E, B > 0$, a rebase number $R$ is essentially two sets of numbers: $\{x_e < E\}$ and $\{x_b < B\}$, and transformation functions $e_R(x): x_b \rightarrow x_e$ and $b_R(x): x_e \rightarrow x_b$ between elements of each set.
+
+More specifically, we define global debt $D$ as a rebase:
+
+\begin{align}
+    D_{\text{global}} &:= (E_{\text{global}}, B_{\text{global}}) \\
+    E_{\text{global}} &:= \text{all global debt} \\
+    B_{\text{global}} &:= \text{ownership of debt}
+\end{align}
+
+This is the singular global debt store that rests at the highest level. Contracts are given pieces of $B_{\text{global}}$ to represent that contract's ownership of global debt. Modifying global debt is the function of various contracts throughout the protocol. Contracts like Vault and Market will be able to modify the $E_{\text{global}}$ and $B_{\text{global}}$. Since contracts own pieces of $B_{\text{global}}$, it is possible for one contract to indirectly modify the debt of another.
+
+To be precise, various functions that modify the global rebase, ($\hat{F}, \hat{G}, \hat{H}$,...), are distributed to other contracts. For example, when a user creates more debt by borrowing some amount $x$ of an asset, the new global debt $D'$ is:
+
+\begin{equation}
+    \label{eq:add-debt}
+    D'_{\text{global}} = \hat{G}(D_{\text{global}}, x)
+\end{equation}
+
+Where $\hat{G}: R \times \mathbb{Z} \rightarrow R'$ (Eq.~\ref{eq:rebase-new-owner}) is a function that modifies a rebase and adds new debt $x$ to the global debt, distributing newly created ownership shares to the Vault.
+
+An in depth discussion of rebase numbers and the transformation functions $\hat{F}$ and $\hat{G}$ is provided in appendix \ref{app:rebase-appendix}. The important thing to note is that access to modify global protocol debt is passed down to various distinct modules.
+
+
+
+
+
+
+\section{Vaults}
+\label{sec:vaults}
+
+Vaults are responsible for the minting of of Mirage Assets. Liquidity providers deposit collateral and borrow Mirage Assets up to a minimum collateralization ratio of the Vault. Vaults hold the underlying debt of the entire protocol.
+
+To be precise, rebase functions $\hat{G}$ and $\hat{H}$ (Eq.~\ref{eq:rebase-new-owner}) are given to Vaults to modify global debt.
+
+\subsection{Debt Management}
+
+Debt is represented in the Vault by a specific debt rebase number:
+
+\begin{align}
+    V &:= (E_{V}, B_{V}) \\
+    E_{V} &:= \text{global debt ownership shares} \\
+    B_{V} &:= \text{vault debt ownership shares}
+\end{align}
+
+When a user deposits into a debt, they are receiving some piece of $B_{V}$, which is convertible to an amount of global debt ownership shares by way of Eq.~\ref{eq:base-to-elastic}, which defines the transformation function $e_V: B_V \rightarrow E_V$.
+
+We can use this result to calculate the total debt owed by the user using the global debt rebase $D_{\text{global}}$, which defines a similar function $e_D$. Therefore, if a user has some amount $x \in B_V$, we can convert this into the actual amount of debt through:
+
+\begin{align}
+    \text{debt}(x \in B_V) &= e_D(e_V(x)) \\
+    &= \frac{e_V(x) \cdot E_{\text{global}}}{B_{\text{global}}} \\
+    &= \frac{\frac{x \cdot E_V}{B_V} \cdot E_{\text{global}}}{B_{\text{global}}} \\
+    &= \frac{x \cdot E_V \cdot E_{\text{global}}}{B_V \cdot B_{\text{global}}}
+\end{align}
+
+This is the tangible amount of debt owed by the user, given their shares of the Vault debt.
+
+When a user wants to borrow an asset, we use the function $\hat{G}: R \times \mathbb{Z} \rightarrow R$ to add new debt $x$ to $V$:
+
+\begin{equation}
+    V' = \hat{G}(V, e_{\hat{G}(D_{\text{global}}, x)}(x))
+\end{equation}
+
+The rest of the vault operations are calculated accordingly. Note that the value $e_{\hat{G}(D, x)}(x)$ is essentially just calculating the amount of base created from the $\hat{G}(D, x)$ operation.
+
+\section{Markets}
+\label{sec:mirage-markets}
+
+A Mirage Market is a completely decentralized perpetuals exchange that allows trades to be opened at the current oracle price. Many of the concepts of a Mirage Market are different from traditional perpetuals exchange, but the overall functionality is similar for the end user. 
+
+\subsection{Debt}
+
+Instead of being given $\hat{G}$ and $\hat{H}$ like the Vault, the market is given the rebase functions $\hat{F}_e$ and $\hat{F}_b$. These allow global debt modification from actions taken in the market contract. Trader payouts and losses, trading fees, and liquidations are all processed to the global debt state through $\hat{F}$.
+
+\subsection{Oracles}
+
+Mirage market uses oracles prices, fetched real-time during the contract call, to determine opening and closing prices of trades. Prices are checked against a moving average and confidence interval to ensure they are reliable. Prices are cached and in the instance of an emergency from the oracle the market participants can still close at the last cached rate.
+
+\subsection{Parameters}
+
+\subsubsection{Open Interest and Skew}
+
+One of the most significant parameters used by a market is its imbalance between long and short open interest. Let's call the long open interest and short open interest $OI_{\text{long}}$ and $OI_{\text{short}}$ respectively, and define:
+
+\begin{equation}
+    \label{eq:skew}
+    skew := OI_{\text{long}} - OI_{\text{short}}
+\end{equation}
+
+The absolute value of $skew$ is generally capped by a market defined $skew_{\text{max}}$ after which markets generally only allow new orders that reduce $skew$. $skew$ is an important variable and is used to determine the ``net protocol leverage" which we will call $L_{\text{global}}$. We can calculate this as:
+
+\begin{equation}
+    L_{\text{global}} = (\sum_{\text{markets}}skew) / \text{total debt} 
+\end{equation}
+
+We never want this value to be large, let's just say for argument we want $L < 1$ or $\sum skew < \text{total debt}$. That roughly translates to the following system parameter condition:
+
+\begin{equation}
+    \sum skew_{\text{max}} < \text{total debt}
+\end{equation}
+
+\subsubsection{Funding}
+
+Funding is calculated from the previously mentioned $skew$. The funding rate, $r$, has its absolute value range-bound by a market defined $r_{min} > 0$ and $r_{\text{max}} > 0$. Funding can either be positive or negative.
+
+When $skew=0$ we want $r=r_{min}$. This is positive, which means the default state of the market is longs paying the minimum funding, which will usually be small.
+
+The purpose of funding in the mirage market is to influence the market to reduce the $skew$, by placing increasing pressure on the skewed positions. 
+
+Let's define the ``skew-factor" $S$ as:
+
+\begin{equation}
+    \label{eq:skew-factor}
+    S := \frac{skew_{\text{max}} \cdot \text{sgn}(skew)}{skew_{\text{max}} - |skew|}
+\end{equation}
+
+Then we define funding as:
+
+\begin{equation}
+    \label{eq:funding}
+    r := \begin{cases}
+        r_{\text{min}} \cdot S, & |r_{\text{min}} \cdot S| < r_{\text{max}} \\
+        r_{\text{max}} \cdot \text{sgn}(S), & \text{else}
+    \end{cases}
+\end{equation}
+
+Note that there exists a $skew'$ where $r_{\text{min}} \cdot S' = r_{\text{max}}$. We can calculate this useful value:
+
+\begin{align}
+    &r_{\text{min}} \cdot \frac{skew_{\text{max}}}{skew_{\text{max}} - |skew'|} = r_{\text{max}} \\
+    \label{eq:skew-at-max-funding}
+    \Rightarrow~&|skew'| = skew_{\text{max}} \cdot (1 - \frac{r_{\text{min}}}{r_{\text{max}}})
+\end{align}
+
+The skew-factor $S$ is an important value and is discussed more in the Appendix. It is important to note that the way funding is collected in a mirage market is fundamentally different than how it is collected on a centralized exchange. On a centralized exchange, a user's funding payment $P_{\text{cex}}$ is calculated with their open interest $OI$ as:
+
+\begin{equation}
+    \label{eq:cex-funding}
+    P_{\text{cex}} = r \cdot \text{value}(OI)
+\end{equation}
+
+Let's call the user's margin $M$. If a user has a position leveraged at ten times their margin, the net funding payment against their margin, will be $10 \cdot r \cdot \text{value}(M)$, since their leveraged position value essentially incurs ten times the funding rate. Therefore when accounting for a leverage $L$, we can say funding is:
+
+\begin{equation}
+    \label{eq:cex-funding-margin}
+    P_{\text{cex}} = L \cdot r \cdot \text{value}(M)
+\end{equation}
+
+In a mirage market, funding is taken at a globally fixed rate against the total margin in a market, based off of the global leverage of that side of the market, namely $L^{\text{long}}_{\text{global}}$ and $L^{\text{short}}_{\text{global}}$. Let's say we have a funding rate $r > 0$ such that longs will be paying funding. Then we can calculate the global payment by all longs as:
+
+\begin{equation}
+    \label{eq:mirage-funding-margin}
+    P_{\text{global}} = L^{\text{long}}_{\text{global}} \cdot r \cdot \text{value}(M^{\text{long}}_{\text{global}})
+\end{equation}
+
+Noting that the leverage of a market can be calculated as: 
+
+\begin{equation}
+    L^{\text{long}}_{\text{global}} = \frac{\text{value}(OI^{\text{long}}_{\text{global}})}{\text{value}(M^{\text{long}}_{\text{global}})} 
+\end{equation}
+
+Therefore the funding payment owed by all longs is:
+
+\begin{equation}
+    P_{\text{global}} = \text{value}(OI^{\text{long}}_{\text{global}}) \cdot r
+\end{equation}
+
+Therefore if a user is long with a positioned that is leveraged 10 times its margin, but the global leverage is only 2, then the user is only responsible for a funding payment of $2 \cdot r$ instead of $10 \cdot r$. The same is true in the reverse scenario. What this means is that \textbf{positions in a Mirage Market pay a fixed percentage funding rate against their margin}, irrelevant of position size.
+
+\subsubsection{Fees}
+
+Fees are calculated in a similar way to funding. A market defines assigns taker or maker fees to trades depending on their impact on the skew. In addition, markets bound both maker and taker fees to the ranges $(m_{\text{min}}, m_{\text{max}})$ and $(t_{\text{min}}, t_{\text{max}})$ Let us say a user wants to open a trade on the long side with open interest $T$. The skew then becomes:
+
+\begin{equation}
+    \label{eq:new-skew}
+    skew' = (OI_{\text{long}} + T) - OI_{\text{short}}
+\end{equation}
+
+Using this value, we define the ratio to the max as $\sigma' = skew' / skew_{max}$. Then we define the fee, $f$, for this trade as:
+\scalebox{0.5}{}
+\begin{equation}
+    \text{\scriptsize $f := \begin{cases}
+        m_{\text{max}}, & skew' < 0 \text{ and } |m_{\text{max}} / \sigma'| > m_{\text{max}} \\
+        |m_{\text{min}} / \sigma'|, & skew' < 0 \text{ and } |m_{\text{max}} \cdot \sigma'| \leq m_{\text{max}} \\
+        t_{\text{max}}, & skew' > 0 \text{ and } |t_{\text{min}} \cdot S'| > t_{\text{max}} \\
+        |t_{\text{min}} \cdot S'|, & skew' > 0 \text{ and } |t_{\text{max}} \cdot S'| \leq t_{\text{max}} \\
+    \end{cases}$}
+\end{equation}
+
+The fee's for various other situations are calculated accordingly.
+
+\subsection{Liquidations}
+
+Liquidations are processed based off of the parsed oracle price. Let's define a value called the ``margin scalar'' $\theta$. 
+
+\begin{equation}
+    \theta = \frac{\text{value}(\text{margin}) - \text{maintenance margin}}{\text{position size}}
+\end{equation}
+
+Where position size is positive and negative for long and short positions respectively. The maintenance margin, is a fixed percentage for each market and is calculated upon opening a position. Each market defines a base margin rate $B$, which gives us:
+
+\begin{equation}
+    \text{maintenance margin} = B \cdot \text{value}(\text{position size})
+\end{equation}
+
+When a position is open we can calculate the liquidation price as:
+
+\begin{equation}
+    \label{eq:liquidation-price}
+    \text{liquidation price} = \text{opening price} + \theta
+\end{equation}
+
+If the market is within a position's liquidation, any account can call to the module and liquidate that position, receiving some percent fee.
+
+\subsection{Limit Orders and Order Triggers}
+
+Limit orders, take profits, stop losses, and liquidations are all processed by external keepers running open source software. Events on chain allow anyone to index market data.
+
+\appendix
+
+\section*{Appendix}
+
+\subsection*{Funding Discussion}
+
+\subsubsection*{Skew Factor}
+It is useful to examine the skew factor $S$ (Eq.~\ref{eq:skew-factor}) to get a better understanding of funding. Note that $S$ becomes exponential as $skew \rightarrow skew_{\text{max}}$. Markets want to configure the ratio $\frac{r_{\text{min}}}{r_{\text{max}}}$ such that $skew'$ falls somewhere after the point at which $S$ stops estimating a linear function. We can take the derivative to see:
+
+\begin{align}
+    \frac{dS}{d|skew|} = \frac{skew_{\text{max}}}{(skew_{\text{max}} - |skew|)^2}
+\end{align}
+
+We can estimate how much we want our funding to be affected by the exponential nature of $S$. E.g. we can say we are interested in some self-defined inflection point where $\frac{dS}{d|skew|} = I > 0$: 
+
+\begin{align}
+    &\frac{skew_{\text{max}}}{(skew_{\text{max}} - |skew''|)^2} = I \\
+    \Rightarrow~&|skew''| = \frac{skew_{\text{max}} \cdot \sqrt{I} - \sqrt{skew_{\text{max}}}}{\sqrt{I}}
+\end{align}
+
+Therefore we can get a decent set of parameters for $\frac{r_{\text{min}}}{r_{\text{max}}}$ depending on the desired inflection point. Say we want to make sure max funding is reached at $I$. Using Eq.~\ref{eq:skew-at-max-funding}:
+
+\begin{align}
+    skew_{\text{max}} \cdot (1 - \frac{r_{\text{min}}}{r_{\text{max}}}) &= \frac{skew_{\text{max}} \cdot \sqrt{I} - \sqrt{skew_{\text{max}}}}{\sqrt{I}} \nonumber \\
+    \Rightarrow~\frac{r_{\text{min}}}{r_{\text{max}}}&=\frac{1}{\sqrt{I \cdot skew_{\text{max}}}}
+\end{align}
+
+we can also see from Eq.~\ref{eq:skew-at-max-funding} that if $r_{\text{min}}=0$, then our funding curve is the entire range of the skew-factor $S$. All of these tools allows markets to tailor a very specific funding curve to that market's needs. 
+
+\subsection*{Rebase Numbers}
+\label{app:rebase-appendix}
+
+Let's first define two sets given $E > 0$ and $B > 0$:
+
+\begin{align}
+    \mathcal{E}(E) &:= \{x_e \mid 0 < x_e \leq E\} \label{eq:elastic-to-base} \\
+    \mathcal{B}(B) &:= \{x_b \mid 0 < x_b \leq B\} \label{eq:base-to-elastic}
+\end{align}
+
+Now let's define a rebase number $R$:
+
+\begin{equation}
+    \label{eq:rebase}
+    R := (E, B)
+\end{equation}
+
+A rebase defines two conversion functions between the sets $\mathcal{E}$ and $\mathcal{B}$
+
+\begin{align}
+    b_R: \mathcal{E} \rightarrow \mathcal{B} \\
+    e_R: \mathcal{B} \rightarrow \mathcal{E}
+\end{align}
+
+We define these functions as follows:
+
+\begin{align}
+    \label{eq:rebase-conversion}
+    b_R(x_e \in \mathcal{E}) &:= \frac{x_e \cdot B}{E} = y_b \in \mathcal{B} \\
+    e_R(y_b \in \mathcal{B}) &:= \frac{y_b \cdot E}{B} = x_e \in \mathcal{E}
+\end{align}
+
+These functions take a number in the base or elastic space respectively. Here are a few important properties:
+
+\begin{align}
+    b_R(E) &= B \\
+    e_R(B) &= E \\
+    b_R(e_R(y_b)) &= y_b \\
+    e_R(b_R(x_e)) &= x_e
+\end{align}
+
+Let's define the set of all rebase numbers as $\mathcal{R}$ and examine functions that modify a rebase number $R$. For example the functions $\hat{F}_{e/b}: \mathcal{R} \times \mathbb{Z} \rightarrow \mathcal{R}$ :
+
+\begin{align}
+    \hat{F}_e(R, x_e) &:= (E + x_e, B) = R' \label{eq:increase-elastic} \\
+    \hat{F}_b(R, x_b) &:= (E, B + x_b) = R' \label{eq:increase-base}
+\end{align}
+
+Note that the new rebase $R'$ will have either a new set $\mathcal{E'}$ or $\mathcal{B'}$. To begin to see the usefulness of these numbers let's consider a base part $x_b \in \mathcal{B}$ and a rebase $R$. We know that the elastic representation of $x_b$ is:
+
+\begin{equation}
+    y_e = e_R(x_b) = \frac{x_b \cdot E}{B} \in \mathcal{E}
+\end{equation}
+
+Now let's consider what happens when we modify $R$ by adding a fixed elastic amount $c_e > 0$.
+
+\begin{align}
+    \label{eq:base-ownership}
+    R' &= \hat{F}_e(R, c_e) \\
+    \Rightarrow y'_e &= e_{R'}(x_b) = \frac{x_b \cdot (E + c_e)}{B} \\
+\end{align}
+
+This gives us the immediate important result that:
+
+\begin{equation}
+    y'_e > y_e
+\end{equation}
+
+What this means is that by altering $R$, the overall "elastic value" of our initial base part $x_b$ has changed. This concept is useful for ownership. We can roughly view $E$ as the total ``owned'' amount, and $B$ as the total shares of ownership. We can define functions that modify $R$ like:
+
+\begin{align}
+    \label{eq:rebase-new-owner}
+    \hat{G}(R, x_e) &:= \hat{F}_b(\hat{F}_e(R, x_e), b_R(x_e)) \\
+    \hat{H}(R, x_b) &:= \hat{F}_e(\hat{F}_b(R, x_b), e_R(x_b))
+\end{align}
+
+These two functions are responsible for adding $x_b$ or $x_e$ to $R$ while keeping the ratio $E/B$ the same. For $x_e$, this is achieved by converting the given $x_e$ into base using $b_R$, and then adding both $x_e$ and $b_R(x_e)$ into $R$. We can see that after this kind of operation, the ratio stays the same:
+
+\begin{align}
+    e_{\hat{G}(R, x_e)}(y_b) &= \frac{y_b \cdot (E + x_e)}{B + b_R(x_e)} \\
+    &= \frac{y_b \cdot (E + x_e)}{B + \frac{x_e \cdot B}{E}} \\
+    &= y_b \cdot \frac{E}{B} \cdot \frac{1 + \frac{x_e}{E}}{1 + \frac{x_e}{E}} \\
+    &= y_b \cdot \frac{E}{B} \\
+    &= e_R(y_b)
+\end{align}
+
+Therefore the functions $G$ and $H$ are such that they keep the conversion functions constant, or in other words: 
+
+\begin{align}
+    e_{\hat{G}(R, x_e)}(y_b) = e_R(y_b) \quad \forall x_e \\
+    b_{\hat{H}(R, x_b)}(y_e) = b_R(y_e) \quad \forall x_b
+\end{align}
+
+\end{multicols}
+
+\end{document}
