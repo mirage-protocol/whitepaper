@@ -121,8 +121,10 @@ This is the tangible amount of debt owed by the user, given their shares of the 
 When a user wants to borrow an asset, we use the function $\hat{G}: R \times \mathbb{Z} \rightarrow R$ to add new debt $x$ to $V$:
 
 \begin{equation}
-    V' = \hat{G}(V, e_{\hat{G}(D_{\text{global}}, x)}(x))
+    V' = \hat{G}(V, e_{\hat{G}(D, x)}(x))
 \end{equation}
+
+Where we are abbreviating $D_{\text{global}}$ to $D$. Note that this also changes the global debt rebase $D$ as well, as illustrated in Eq.~\ref{eq:add-debt}.
 
 The rest of the vault operations are calculated accordingly. Note that the value $e_{\hat{G}(D, x)}(x)$ is essentially just calculating the amount of base created from the $\hat{G}(D, x)$ operation.
 
